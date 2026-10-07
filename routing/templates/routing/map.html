@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fuel Route Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 1.5rem;
+      background: #f7f8fa;
+      color: #1b1f24;
+    }
+    h1 { font-size: 1.4rem; margin: 0 0 1rem; }
+    form {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: flex-end;
+      margin-bottom: 0.75rem;
+    }
+    label {
+      display: flex;
+      flex-direction: column;
+      font-size: 0.85rem;
+      gap: 0.25rem;
+    }
+    input {
+      padding: 0.5rem 0.6rem;
+      border: 1px solid #c9ced6;
+      border-radius: 6px;
+      font-size: 1rem;
+      min-width: 15rem;
+    }
+    button {
+      padding: 0.55rem 1.1rem;
+      border: 0;
+      border-radius: 6px;
+      background: #2f6fd0;
+      color: #fff;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.6; cursor: default; }
+    #error { color: #b3261e; min-height: 1.2em; margin: 0 0 0.75rem; }
+    #map {
+      height: 60vh;
+      min-height: 420px;
+      border: 1px solid #c9ced6;
+      border-radius: 8px;
+    }
+    #summary {
+      margin-top: 1rem;
+      background: #fff;
+      border: 1px solid #c9ced6;
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      max-width: 32rem;
+    }
+    #summary h2 { font-size: 1rem; margin: 0 0 0.5rem; }
+    #summary dl {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.3rem 1rem;
+      margin: 0;
+    }
+    #summary dt { color: #5b6470; }
+    #summary dd { margin: 0; font-variant-numeric: tabular-nums; }
+    .station-popup div { white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <h1>Fuel Route Map</h1>
+
+  <form id="route-form">
+    <label>Start location
+      <input id="start" name="start" type="text" autocomplete="off">
+    </label>
+    <label>Finish location
+      <input id="finish" name="finish" type="text" autocomplete="off">
+    </label>
+    <button id="calculate" type="submit">Calculate Route</button>
+  </form>
+
+  <p id="error" role="alert"></p>
+
+  <div id="map"></div>
+
+  <section id="summary" hidden>
+    <h2>Summary</h2>
+    <dl>
+      <dt>Total distance</dt><dd id="sum-distance">-</dd>
+      <dt>Total gallons</dt><dd id="sum-gallons">-</dd>
+      <dt>Total fuel cost</dt><dd id="sum-cost">-</dd>
+      <dt>Number of fuel stops</dt><dd id="sum-stops">-</dd>
+      <dt>Vehicle MPG</dt><dd id="sum-mpg">-</dd>
+      <dt>Maximum range</dt><dd id="sum-range">-</dd>
+    </dl>
+  </section>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    (function () {
+      'use strict';
+      // The page only ever calls POST /api/v1/routes/ and displays what
+      // the API returns: no fuel math and no provider calls here.
+      var form = document.getElementById('route-form');
+      var startInput = document.getElementById('start');
+      var finishInput = document.getElementById('finish');
+      var button = document.getElementById('calculate');
+      var errorBox = document.getElementById('error');
+      var summary = document.getElementById('summary');
+
+      var map = L.map('map').setView([39.5, -98.35], 4); // USA overview
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap contributors'
+      }).addTo(map);
+      var layers = L.layerGroup().addTo(map);
+
+      // Build popup content from text nodes only (values are never HTML).
+      function popupRows(rows) {
+        var box = document.createElement('div');
+        box.className = 'station-popup';
+        rows.forEach(function (pair) {
+          var row = document.createElement('div');
+          var label = document.createElement('strong');
+          label.textContent = pair[0] + ': ';
+          row.appendChild(label);
+          row.appendChild(document.createTextNode(String(pair[1])));
+          box.appendChild(row);
+        });
+        return box;
+      }
+
+      function setText(id, value) {
+        document.getElementById(id).textContent = String(value);
+      }
+
+      function clearMap() {
+        layers.clearLayers();
+      }
+
+      function showError(message) {
+        errorBox.textContent = message;
+        summary.hidden = true;
+        clearMap();
+      }
+
+      function render(data) {
+        clearMap();
+        // GeoJSON coordinates are [lon, lat]; Leaflet wants [lat, lon].
+        var path = data.route.geometry.coordinates.map(function (point) {
+          return [point[1], point[0]];
+        });
+        var line = L.polyline(path, { color: '#2f6fd0', weight: 4 }).addTo(layers);
+
+        L.marker([data.start.latitude, data.start.longitude])
+          .bindPopup(popupRows([['Start', data.start.name]]))
+          .addTo(layers);
+        L.marker([data.finish.latitude, data.finish.longitude])
+          .bindPopup(popupRows([['Finish', data.finish.name]]))
+          .addTo(layers);
+
+        data.fuel_stops.forEach(function (stop) {
+          L.marker([stop.latitude, stop.longitude])
+            .bindPopup(popupRows([
+              ['Station name', stop.station_name],
+              ['City', stop.city],
+              ['State', stop.state],
+              ['Price per gallon', stop.price_per_gallon],
+              ['Gallons purchased', stop.gallons_purchased],
+              ['Fuel cost', stop.fuel_cost]
+            ]))
+            .addTo(layers);
+        });
+
+        if (path.length > 1) {
+          map.fitBounds(line.getBounds(), { padding: [30, 30] });
+        }
+
+        setText('sum-distance', data.fuel_summary.total_distance_miles);
+        setText('sum-gallons', data.fuel_summary.total_gallons);
+        setText('sum-cost', data.fuel_summary.total_fuel_cost);
+        setText('sum-stops', data.fuel_stops.length);
+        setText('sum-mpg', data.vehicle.mpg);
+        setText('sum-range', data.vehicle.max_range_miles);
+        summary.hidden = false;
+        errorBox.textContent = '';
+      }
+
+      form.addEventListener('submit', function (event) {
+        event.preventDefault();
+        errorBox.textContent = '';
+        summary.hidden = true;
+        clearMap();
+        button.disabled = true;
+        fetch('/api/v1/routes/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ start: startInput.value, finish: finishInput.value })
+        })
+          .then(function (response) {
+            return response.json().then(function (data) {
+              if (!response.ok) {
+                var message = data && data.error ? data.error.message : 'Request failed';
+                throw new Error(message);
+              }
+              return data;
+            });
+          })
+          .then(render)
+          .catch(function (err) { showError(err.message); })
+          .finally(function () { button.disabled = false; });
+      });
+    })();
+  </script>
+</body>
+</html>

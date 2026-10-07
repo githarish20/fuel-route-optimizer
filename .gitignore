@@ -1,0 +1,28 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment files (never commit real keys)
+.env
+
+# Django
+*.log
+db.sqlite3
+media/
+
+# Test / coverage tooling
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
